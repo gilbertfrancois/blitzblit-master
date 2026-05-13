@@ -1,0 +1,2 @@
+# Per-server cert data, never commit
+/letsencrypt/

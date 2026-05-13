@@ -1,0 +1,65 @@
+x-logging-default: &logging-default
+  driver: "json-file"
+  options:
+    max-size: "100m"
+    max-file: "3"
+
+services:
+  nginx:
+    image: nginx:latest
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - ./nginx/nginx_prod.conf:/etc/nginx/nginx.conf:ro
+      # Both dirs are mounted so the relative symlinks in sites-enabled/
+      # (which point at ../sites-available/<file>.conf) resolve correctly
+      # inside the container.
+      - ./nginx/sites-available:/etc/nginx/sites-available:ro
+      - ./nginx/sites-enabled:/etc/nginx/sites-enabled:ro
+      # Let's Encrypt certs (managed by the certbot sidecar) and the ACME
+      # HTTP-01 challenge webroot. Same paths inside and outside the container
+      # so init_letsencrypt.sh, certbot renew, and nginx all see the same files.
+      - ./letsencrypt/conf:/etc/letsencrypt
+      - ./letsencrypt/www:/var/www/certbot
+    command:
+      - /bin/sh
+      - -c
+      - |-
+        # Reload nginx every 6h so renewed certs from the certbot sidecar get
+        # picked up. Loop runs in the background; foreground exec keeps the
+        # container alive and proxies signals to nginx.
+        while :; do sleep 6h & wait $${!}; nginx -s reload; done &
+        exec nginx -g 'daemon off;'
+    networks:
+      - blitzblit-net
+    logging: *logging-default
+
+  certbot:
+    image: certbot/certbot:latest
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./letsencrypt/conf:/etc/letsencrypt
+      - ./letsencrypt/www:/var/www/certbot
+    # Loop: check for renewals every 12h. `certbot renew` is a no-op when a
+    # cert is far from expiry, so this is safe to run on a tight schedule.
+    # Initial cert issuance is handled by ./init_letsencrypt.sh, not here.
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |-
+        trap exit TERM
+        while :; do
+          certbot renew
+          sleep 12h & wait $${!}
+        done
+    logging: *logging-default
+
+networks:
+  # Shared external network for upstream services in sibling repos (each app's
+  # docker-compose.yml joins this with `external: true`). Created once on the
+  # host by the ansible playbook via: docker network create blitzblit-net
+  blitzblit-net:
+    external: true
+    name: blitzblit-net

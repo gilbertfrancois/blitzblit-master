@@ -1,0 +1,47 @@
+# Per-site nginx conf — copy this file, rename to <domain>.conf, replace the
+# two placeholders, then add the domain to DOMAINS in env and re-run
+# init_letsencrypt.sh (or just `nginx -s reload` once the cert exists).
+#
+# The upstream service must be on the blitzblit-net docker network and listen
+# on port 80 (or whatever you pass below). Master nginx terminates TLS; the
+# proxy hop is plain HTTP and stays inside the docker bridge.
+
+server {
+    server_name {{DOMAIN}};
+    listen 80;
+    listen [::]:80;
+
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    server_name {{DOMAIN}};
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    ssl_certificate     /etc/letsencrypt/live/{{DOMAIN}}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{DOMAIN}}/privkey.pem;
+
+    # Docker's embedded DNS server. Combined with a variable in proxy_pass
+    # below, this defers upstream name resolution to request time so nginx
+    # starts even when the upstream container isn't running yet (and
+    # survives upstream restarts without needing a master reload).
+    resolver 127.0.0.11 valid=30s ipv6=off;
+
+    client_max_body_size 200M;
+    client_body_timeout  600s;
+    proxy_read_timeout   600s;
+
+    location / {
+        set $upstream http://{{UPSTREAM}}:80;
+        proxy_pass $upstream$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+    }
+}

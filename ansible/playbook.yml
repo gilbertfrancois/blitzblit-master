@@ -1,0 +1,225 @@
+---
+# Provisions a host to run the shared nginx + certbot for every blitzblit
+# subdomain. App repos (msx-digitizer, gallery, blitzblit.com, ...) deploy
+# their own containers and attach them to the `blitzblit-net` docker network
+# this playbook creates. Master nginx terminates TLS and proxies to them by
+# service name on that network.
+#
+# - Installs Docker engine + Compose v2 from Docker's official apt repo.
+# - Creates the `blitzblit-net` docker network (idempotent).
+# - Stages docker-compose.yml, nginx confs, init_letsencrypt.sh, start/stop
+#   under {{ site_root }} (default ~/sites/blitzblit-master).
+# - Renders env from the domain list in group_vars/all.yml.
+#
+# Does NOT pull/start containers or run init_letsencrypt.sh — those are
+# post-deploy steps the operator runs after confirming DNS for every domain.
+
+- name: Provision blitzblit-master (nginx + certbot reverse proxy)
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    repo_root: "{{ playbook_dir }}/.."
+
+  tasks:
+    # ---------------------------------------------------------------------
+    # 1. Docker engine + Compose plugin
+    # ---------------------------------------------------------------------
+    - name: Install apt prerequisites for Docker repo
+      ansible.builtin.apt:
+        name: [ca-certificates, curl, gnupg]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Ensure /etc/apt/keyrings exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Get dpkg architecture
+      ansible.builtin.command: dpkg --print-architecture
+      register: dpkg_arch
+      changed_when: false
+
+    - name: Install Docker apt signing key
+      ansible.builtin.get_url:
+        url: "https://download.docker.com/linux/{{ ansible_facts['distribution'] | lower }}/gpg"
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+        force: false
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ dpkg_arch.stdout }}
+          signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/{{ ansible_facts['distribution'] | lower }}
+          {{ ansible_facts['distribution_release'] }} stable
+        state: present
+        filename: docker
+
+    - name: Install Docker engine and Compose v2 plugin
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+    - name: Enable and start docker
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Add login user to docker group
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+      when: ansible_user != "root"
+
+    # ---------------------------------------------------------------------
+    # 2. Shared docker network used by every app repo
+    # ---------------------------------------------------------------------
+    - name: Ensure shared docker network exists
+      community.docker.docker_network:
+        name: "{{ shared_network }}"
+        state: present
+      register: shared_net
+      # If community.docker isn't installed, fall back to a shell exec.
+      ignore_errors: true
+
+    - name: Fallback — create shared network via docker CLI
+      ansible.builtin.shell: |
+        if ! docker network inspect {{ shared_network }} >/dev/null 2>&1; then
+          docker network create {{ shared_network }}
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: shared_net is failed
+
+    # ---------------------------------------------------------------------
+    # 3. Folder structure under {{ site_root }}
+    # ---------------------------------------------------------------------
+    - name: Create site directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+      loop:
+        - "{{ site_root }}"
+        - "{{ site_root }}/nginx"
+        - "{{ site_root }}/nginx/sites-available"
+        - "{{ site_root }}/nginx/sites-enabled"
+        - "{{ site_root }}/letsencrypt"
+        - "{{ site_root }}/letsencrypt/conf"
+        - "{{ site_root }}/letsencrypt/www"
+
+    # ---------------------------------------------------------------------
+    # 4. Stage compose + nginx confs + helper scripts
+    # ---------------------------------------------------------------------
+    - name: Copy docker-compose.yml
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/docker-compose.yml"
+        dest: "{{ site_root }}/docker-compose.yml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0644"
+
+    - name: Copy main nginx config
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/nginx/nginx_prod.conf"
+        dest: "{{ site_root }}/nginx/nginx_prod.conf"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0644"
+
+    # sites-available holds the actual config files; sites-enabled holds
+    # relative symlinks. ansible.posix.synchronize wraps rsync, so symlinks
+    # are preserved (-a implies -l) and delete: true keeps the server tree
+    # in sync with the repo. No delegate_to — default pushes from controller
+    # to the remote, which is what we want.
+    # owner/group: false → don't try to preserve the controller's uid/gid on
+    # the remote (the user `gilbert` doesn't exist there). The destination
+    # files end up owned by the SSH user (ubuntu) on the remote, which is
+    # what we want anyway.
+    - name: Sync sites-available/
+      ansible.posix.synchronize:
+        src: "{{ repo_root }}/nginx/sites-available/"
+        dest: "{{ site_root }}/nginx/sites-available/"
+        delete: true
+        owner: false
+        group: false
+        rsync_opts: ["--exclude=_template.conf.example"]
+      become: false
+
+    - name: Sync sites-enabled/ (symlinks preserved)
+      ansible.posix.synchronize:
+        src: "{{ repo_root }}/nginx/sites-enabled/"
+        dest: "{{ site_root }}/nginx/sites-enabled/"
+        delete: true
+        owner: false
+        group: false
+        # All entries here are symlinks; setting times on a symlink requires
+        # owning it, which trips up ubuntu when symlinks were previously
+        # created by root. Skip preserving times entirely.
+        times: false
+      become: false
+
+    - name: Copy lifecycle scripts
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/{{ item }}"
+        dest: "{{ site_root }}/{{ item }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+      loop:
+        - start.sh
+        - stop.sh
+        - init_letsencrypt.sh
+
+    - name: Render env file
+      ansible.builtin.template:
+        src: env.j2
+        dest: "{{ site_root }}/env"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0640"
+
+    # ---------------------------------------------------------------------
+    # 5. Friendly next-steps reminder
+    # ---------------------------------------------------------------------
+    - name: Post-deploy reminder
+      ansible.builtin.debug:
+        msg: |
+          Provisioning complete. Next steps on the server:
+
+            1. Confirm DNS for every domain in env:
+                 {{ domains | join(', ') }}
+               All must resolve to this server's public IP.
+
+            2. Open ports 80 and 443 in the EC2 security group (one-time).
+
+            3. SSH in and run the Let's Encrypt bootstrap (one time):
+                 cd {{ site_root }}
+                 source ./env
+                 ./init_letsencrypt.sh --staging   # dry-run against LE staging
+                 ./init_letsencrypt.sh             # real certs
+
+            4. Start master nginx + certbot:
+                 ./start.sh
+
+            5. Deploy app repos. Each app's docker-compose.yml joins the
+               external network `{{ shared_network }}` (created by this play),
+               and exposes its service name on internal port 80. The matching
+               nginx/sites/<domain>.conf in master will then proxy to it.

@@ -1,0 +1,12 @@
+# Space-separated list of domains for which to issue Let's Encrypt certs.
+# Keep this in sync with the files symlinked into nginx/sites-enabled/.
+#
+# Enable a new domain:
+#   1. Create or copy a file in nginx/sites-available/
+#   2. ln -s ../sites-available/<domain>.conf nginx/sites-enabled/
+#   3. Append the domain to DOMAINS below
+#   4. Re-run ./init_letsencrypt.sh
+export DOMAINS="msx-digitizer.blitzblit.com msx-digitizer-gallery.blitzblit.com"
+
+# Let's Encrypt registration email (account recovery + expiry warnings).
+export ACME_EMAIL=admin@blitzblit.com
