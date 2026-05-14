@@ -197,13 +197,45 @@
         mode: "0640"
 
     # ---------------------------------------------------------------------
-    # 5. Friendly next-steps reminder
+    # 5. Pull latest images and (re)start the stack
+    #
+    # Conditional: nginx fails to start when sites-enabled/*.conf reference
+    # cert files that don't exist yet. On first-time deploy, certs haven't
+    # been issued (init_letsencrypt.sh hasn't run), so we skip the up step
+    # and let the user run it manually after bootstrap.
+    # ---------------------------------------------------------------------
+    - name: Check whether Let's Encrypt certs exist yet
+      ansible.builtin.find:
+        paths: "{{ site_root }}/letsencrypt/conf/live"
+        file_type: directory
+      register: cert_dirs
+      failed_when: false
+
+    - name: Pull and (re)start master (certs already issued)
+      ansible.builtin.command:
+        cmd: docker compose up --pull always -d
+        chdir: "{{ site_root }}"
+      environment:
+        ACME_EMAIL: "{{ acme_email }}"
+      when:
+        - auto_up | default(true)
+        - cert_dirs.matched | default(0) > 0
+      changed_when: true
+
+    # ---------------------------------------------------------------------
+    # 6. Friendly next-steps reminder
     # ---------------------------------------------------------------------
     - name: Post-deploy reminder
       ansible.builtin.debug:
         msg: |
-          Provisioning complete. Next steps on the server:
+          Provisioning complete. {{
+            'Stack pulled + (re)started automatically (certs already exist).'
+            if cert_dirs.matched | default(0) > 0
+            else 'Master nginx NOT started yet — no Let''s Encrypt certs found.'
+          }}
 
+          {% if cert_dirs.matched | default(0) == 0 %}
+          First-time bootstrap:
             1. Confirm DNS for every domain in env:
                  {{ domains | join(', ') }}
                All must resolve to this server's public IP.
@@ -215,11 +247,15 @@
                  source ./env
                  ./init_letsencrypt.sh --staging   # dry-run against LE staging
                  ./init_letsencrypt.sh             # real certs
+                 # init_letsencrypt.sh also brings nginx up at the end.
 
-            4. Start master nginx + certbot:
-                 ./start.sh
+            4. Re-run this playbook to enable auto-up on future runs.
+          {% else %}
+          Subsequent runs will re-pull master's images and recreate any
+          changed containers. Pass `-e auto_up=false` to ansible-playbook
+          to skip the up step (config-only changes).
+          {% endif %}
 
-            5. Deploy app repos. Each app's docker-compose.yml joins the
-               external network `{{ shared_network }}` (created by this play),
-               and exposes its service name on internal port 80. The matching
-               nginx/sites/<domain>.conf in master will then proxy to it.
+          Deploy app repos (digitizer, gallery, …) separately — each has
+          its own ansible playbook that joins the `{{ shared_network }}`
+          network this play created.
