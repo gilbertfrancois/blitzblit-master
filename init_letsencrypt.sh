@@ -15,6 +15,7 @@
 # The certbot sidecar in docker-compose.yml handles renewals after bootstrap.
 
 set -euo pipefail
+source ./env
 
 : "${DOMAINS:?source env first}"
 : "${ACME_EMAIL:?source env first}"
@@ -22,7 +23,7 @@ set -euo pipefail
 compose() { docker compose "$@"; }
 
 # shellcheck disable=SC2206  # word-splitting on DOMAINS is intentional
-domains=( ${DOMAINS} )
+domains=(${DOMAINS})
 data_path="./letsencrypt"
 staging=0
 for arg in "$@"; do
@@ -32,8 +33,11 @@ done
 if [ -d "$data_path/conf/live" ] && [ "$(ls -A "$data_path/conf/live" 2>/dev/null | grep -v '^README$' | head -c1)" ]; then
     read -r -p "Existing certificates found in $data_path/conf/live. Continue? Already-issued domains are kept, only missing ones will be requested. (y/N) " reply
     case "$reply" in
-        y|Y) ;;
-        *) echo "Aborted."; exit 0 ;;
+    y | Y) ;;
+    *)
+        echo "Aborted."
+        exit 0
+        ;;
     esac
 fi
 

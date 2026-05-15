@@ -124,6 +124,7 @@
         - "{{ site_root }}/letsencrypt"
         - "{{ site_root }}/letsencrypt/conf"
         - "{{ site_root }}/letsencrypt/www"
+        - "{{ site_root }}/static/blitzblit.com"
 
     # ---------------------------------------------------------------------
     # 4. Stage compose + nginx confs + helper scripts
@@ -163,6 +164,35 @@
         rsync_opts: ["--exclude=_template.conf.example"]
       become: false
 
+    # blitzblit.com landing page — static files served directly by nginx
+    - name: Convert blitzblit.com preview images (runs locally before sync)
+      ansible.builtin.command:
+        cmd: ./convert_images.sh
+        chdir: "{{ repo_root }}/../blitzblit.com"
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Sync blitzblit.com static files
+      ansible.posix.synchronize:
+        src: "{{ repo_root }}/../blitzblit.com/"
+        dest: "{{ site_root }}/static/blitzblit.com/"
+        delete: true
+        owner: false
+        group: false
+        rsync_opts:
+          - "--exclude=Dockerfile"
+          - "--exclude=docker-compose.yml"
+          - "--exclude=build_images.sh"
+          - "--exclude=convert_images.sh"
+          - "--exclude=start.sh"
+          - "--exclude=stop.sh"
+          - "--exclude=.dockerignore"
+          - "--exclude=.git"
+          - "--exclude=ansible"
+          - "--exclude=assets/images/original"
+      become: false
+
     - name: Sync sites-enabled/ (symlinks preserved)
       ansible.posix.synchronize:
         src: "{{ repo_root }}/nginx/sites-enabled/"
@@ -187,6 +217,7 @@
         - start.sh
         - stop.sh
         - init_letsencrypt.sh
+        - reset_letsencrypt.sh
 
     - name: Render env file
       ansible.builtin.template:

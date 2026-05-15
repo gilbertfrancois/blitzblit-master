@@ -4,8 +4,12 @@
 # listed here (otherwise the cert is issued but nginx never serves the
 # domain). Read by env.j2 → init_letsencrypt.sh.
 domains:
+  - www.blitzblit.com
+  - blitzblit.com
   - msx-digitizer.blitzblit.com
   - msx-digitizer-gallery.blitzblit.com
+  - pong.blitzblit.com
+  - video-downloader.blitzblit.com
 
 # Let's Encrypt registration email (expiry warnings, account recovery only).
 acme_email: admin@blitzblit.com

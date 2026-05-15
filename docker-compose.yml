@@ -22,6 +22,8 @@ services:
       # so init_letsencrypt.sh, certbot renew, and nginx all see the same files.
       - ./letsencrypt/conf:/etc/letsencrypt
       - ./letsencrypt/www:/var/www/certbot
+      # Static landing page served directly by nginx (no separate container)
+      - ./static/blitzblit.com:/var/www/blitzblit.com:ro
     command:
       - /bin/sh
       - -c
