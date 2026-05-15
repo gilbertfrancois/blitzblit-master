@@ -2,7 +2,7 @@
 
 Shared **nginx reverse proxy + Let's Encrypt certbot** for every
 `*.blitzblit.com` subdomain. Each app (digitizer, gallery, the main Flask
-site, movie-downloader, ...) lives in its own repo and joins the shared
+site, video-downloader, ...) lives in its own repo and joins the shared
 `blitzblit-net` docker network created by this stack.
 
 ## How it fits together
@@ -15,7 +15,7 @@ public internet ──HTTPS──▶ master nginx :443       ◀── owns ever
                               │
             ┌─────────────────┼──────────────────┬─────────────────┐
             ▼                 ▼                  ▼                 ▼
-       digitizer:80     gallery:80       blitzblit-com:80   movie-downloader:80
+       digitizer:80     gallery:80       blitzblit-com:80   video-downloader:80
        (own repo)       (own repo)       (own repo)         (own repo)
 ```
 
@@ -100,7 +100,7 @@ blitzblit-master/
 │   │   ├── msx-digitizer.blitzblit.com.conf
 │   │   ├── msx-digitizer-gallery.blitzblit.com.conf
 │   │   ├── www.blitzblit.com.conf
-│   │   └── movie-downloader.blitzblit.com.conf
+│   │   └── video-downloader.blitzblit.com.conf
 │   └── sites-enabled/          relative symlinks to the active subset
 ├── letsencrypt/                gitignored — populated by init script
 │   ├── conf/                   /etc/letsencrypt inside containers
