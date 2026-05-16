@@ -1,6 +1,6 @@
 all:
   hosts:
-    msx-digitizer.blitzblit.com:
+    www.blitzblit.com:
       # Login user on the server. Adjust per your AMI.
       ansible_user: ubuntu
       ansible_python_interpreter: /usr/bin/python3
